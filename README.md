@@ -15,9 +15,9 @@ comnication in brodcast send to all
 
 with 2 ports
 
-1 for send from the client to the server
+1 for send from the client to the server port 67/udp
 
-2 for send from the server to the client
+2 for send from the server to the client port 68/udp
 
 dhcp discover from start, it send all users
 
@@ -40,9 +40,15 @@ request for the client, asking for the parameters
 	gcc server.c -o server
 	./server
 
+new server
+
+	gcc -o dhcp_server test_server.c -lpthread
+
 ### run client in python
 
 	python client.py
+
+	sudo go run test_client.go 
 
 
 ### references
@@ -51,3 +57,10 @@ request for the client, asking for the parameters
 https://github.com/ejt0062/dhcpserver-c/tree/master
 
 https://github.com/crossbowerbt/dhcpserver
+
+
+### todo 
+
+add log file
+
+change ports
