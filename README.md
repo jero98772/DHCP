@@ -9,6 +9,31 @@ dns sever as a hashmap
 
 subneting not mean something strange, just can be accsesible from outside and hosted in aws
 
+el cliente debe mandar peticiones de forma repetitiva
+
+comnication in brodcast send to all
+
+with 2 ports
+
+1 for send from the client to the server
+
+2 for send from the server to the client
+
+dhcp discover from start, it send all users
+
+we can use a dns hashmap
+
+time of leassing , is time of that device will have that address
+
+log for time lessing
+
+offer is in brodcast for all 
+
+request for the client, asking for the parameters
+
+
+67/UDP (servidor)
+68/UDP (cliente)
 
 ### run server in c
 
