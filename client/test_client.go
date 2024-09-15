@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	DHCPServerPort    = 67
-	DHCPClientPort    = 68
+	DHCPServerPort    = 6767
+	DHCPClientPort    = 6868
 	MaxDHCPPacketSize = 1024
 )
 
@@ -32,6 +32,7 @@ type DHCPPacket struct {
 }
 
 func (p *DHCPPacket) Marshal() []byte {
+	fmt.Println("Marshaling DHCP packet...")
 	buf := make([]byte, 240+len(p.Options))
 	buf[0] = p.Op
 	buf[1] = p.Htype
@@ -52,6 +53,7 @@ func (p *DHCPPacket) Marshal() []byte {
 }
 
 func (p *DHCPPacket) Unmarshal(data []byte) error {
+	fmt.Println("Unmarshaling DHCP packet...")
 	if len(data) < 240 {
 		return fmt.Errorf("packet too short")
 	}
@@ -74,10 +76,12 @@ func (p *DHCPPacket) Unmarshal(data []byte) error {
 }
 
 func addDHCPOption(options []byte, optionType byte, optionValue []byte) []byte {
+	fmt.Printf("Adding DHCP option: %d\n", optionType)
 	return append(options, optionType, byte(len(optionValue)))
 }
 
 func createDHCPDiscover(macAddr net.HardwareAddr) *DHCPPacket {
+	fmt.Printf("Creating DHCP Discover packet with MAC address: %v\n", macAddr)
 	packet := &DHCPPacket{
 		Op:    1,
 		Htype: 1,
@@ -88,14 +92,15 @@ func createDHCPDiscover(macAddr net.HardwareAddr) *DHCPPacket {
 	copy(packet.Chaddr[:], macAddr)
 
 	// Add DHCP options
-	packet.Options = addDHCPOption(packet.Options, 53, []byte{1}) // DHCP Discover
-	packet.Options = addDHCPOption(packet.Options, 55, []byte{1, 3, 6, 15}) // Parameter Request List
-	packet.Options = append(packet.Options, 255) // End option
+	packet.Options = addDHCPOption(packet.Options, 53, []byte{1})               // DHCP Discover
+	packet.Options = addDHCPOption(packet.Options, 55, []byte{1, 3, 6, 15})     // Parameter Request List
+	packet.Options = append(packet.Options, 255)                                // End option
 
 	return packet
 }
 
 func createDHCPRequest(offer *DHCPPacket, macAddr net.HardwareAddr) *DHCPPacket {
+	fmt.Printf("Creating DHCP Request packet with XID: %d\n", offer.Xid)
 	packet := &DHCPPacket{
 		Op:    1,
 		Htype: 1,
@@ -107,21 +112,24 @@ func createDHCPRequest(offer *DHCPPacket, macAddr net.HardwareAddr) *DHCPPacket 
 	copy(packet.Yiaddr[:], offer.Yiaddr[:])
 
 	// Add DHCP options
-	packet.Options = addDHCPOption(packet.Options, 53, []byte{3}) // DHCP Request
-	packet.Options = addDHCPOption(packet.Options, 50, offer.Yiaddr[:]) // Requested IP Address
-	packet.Options = addDHCPOption(packet.Options, 54, offer.Siaddr[:]) // DHCP Server Identifier
-	packet.Options = append(packet.Options, 255) // End option
+	packet.Options = addDHCPOption(packet.Options, 53, []byte{3})          // DHCP Request
+	packet.Options = addDHCPOption(packet.Options, 50, offer.Yiaddr[:])    // Requested IP Address
+	packet.Options = addDHCPOption(packet.Options, 54, offer.Siaddr[:])    // DHCP Server Identifier
+	packet.Options = append(packet.Options, 255)                           // End option
 
 	return packet
 }
 
 func dhcpClient() error {
+	fmt.Println("Starting DHCP client...")
 	// Create UDP connection
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: DHCPClientPort})
 	if err != nil {
 		return fmt.Errorf("failed to create UDP connection: %v", err)
 	}
 	defer conn.Close()
+
+	fmt.Println("UDP connection created on client port:", DHCPClientPort)
 
 	// Get interface MAC address
 	ifaces, err := net.Interfaces()
@@ -132,6 +140,7 @@ func dhcpClient() error {
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagLoopback == 0 && iface.Flags&net.FlagUp != 0 {
 			macAddr = iface.HardwareAddr
+			fmt.Printf("Selected interface: %s with MAC: %v\n", iface.Name, macAddr)
 			break
 		}
 	}
@@ -140,6 +149,7 @@ func dhcpClient() error {
 	}
 
 	// Send DHCP Discover
+	fmt.Println("Sending DHCP Discover...")
 	discoverPacket := createDHCPDiscover(macAddr)
 	_, err = conn.WriteToUDP(discoverPacket.Marshal(), &net.UDPAddr{IP: net.IPv4bcast, Port: DHCPServerPort})
 	if err != nil {
@@ -147,6 +157,7 @@ func dhcpClient() error {
 	}
 
 	// Receive DHCP Offer
+	fmt.Println("Waiting for DHCP Offer...")
 	offerBuf := make([]byte, MaxDHCPPacketSize)
 	n, _, err := conn.ReadFromUDP(offerBuf)
 	if err != nil {
@@ -157,8 +168,10 @@ func dhcpClient() error {
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal DHCP Offer: %v", err)
 	}
+	fmt.Printf("Received DHCP Offer with XID: %d\n", offerPacket.Xid)
 
 	// Send DHCP Request
+	fmt.Println("Sending DHCP Request...")
 	requestPacket := createDHCPRequest(offerPacket, macAddr)
 	_, err = conn.WriteToUDP(requestPacket.Marshal(), &net.UDPAddr{IP: net.IPv4bcast, Port: DHCPServerPort})
 	if err != nil {
@@ -166,6 +179,7 @@ func dhcpClient() error {
 	}
 
 	// Receive DHCP ACK
+	fmt.Println("Waiting for DHCP ACK...")
 	ackBuf := make([]byte, MaxDHCPPacketSize)
 	n, _, err = conn.ReadFromUDP(ackBuf)
 	if err != nil {

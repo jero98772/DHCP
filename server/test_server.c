@@ -10,9 +10,11 @@
 #define MAX_CLIENTS 100
 #define IP_POOL_START "192.168.1.100"
 #define IP_POOL_END "192.168.1.200"
-#define SERVER_IP "192.168.1.1"
-#define DHCP_SERVER_PORT 67
-#define DHCP_CLIENT_PORT 68
+#define SERVER_IP "127.0.0.1"
+//we use 6767 because is used by real dhcp
+#define DHCP_SERVER_PORT 6767
+//we use 6868 because is used by real dhcp
+#define DHCP_CLIENT_PORT 6868
 #define MAX_DHCP_PACKET_SIZE 1024
 
 typedef struct {
@@ -60,15 +62,18 @@ void add_dns_entry(const char* domain, const char* ip) {
         strncpy(dns_table[dns_entries].domain, domain, 255);
         strncpy(dns_table[dns_entries].ip, ip, 15);
         dns_entries++;
+        printf("Added DNS entry: %s -> %s\n", domain, ip);
     }
 }
 
 const char* lookup_dns(const char* domain) {
     for (int i = 0; i < dns_entries; i++) {
         if (strcmp(dns_table[i].domain, domain) == 0) {
+            printf("Found DNS entry for %s: %s\n", domain, dns_table[i].ip);
             return dns_table[i].ip;
         }
     }
+    printf("No DNS entry found for %s\n", domain);
     return NULL;
 }
 
@@ -91,14 +96,17 @@ uint32_t get_next_available_ip() {
         }
 
         if (available) {
+            printf("Next available IP: %s\n", ip_str);
             return htonl(ip);
         }
     }
+    printf("No available IPs found.\n");
 
     return 0; // No available IPs
 }
 
 void add_dhcp_option(uint8_t *options, int *offset, uint8_t option_code, uint8_t option_length, uint8_t *option_value) {
+    printf("Adding DHCP option: Code %d, Length %d\n", option_code, option_length);
     options[(*offset)++] = option_code;
     options[(*offset)++] = option_length;
     memcpy(&options[*offset], option_value, option_length);
@@ -106,6 +114,8 @@ void add_dhcp_option(uint8_t *options, int *offset, uint8_t option_code, uint8_t
 }
 
 void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
+    printf("Handling DHCP Discover\n");
+
     DHCPPacket response;
     memset(&response, 0, sizeof(DHCPPacket));
 
@@ -148,6 +158,7 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     }
 
     client_addr->sin_port = htons(DHCP_CLIENT_PORT);
+    printf("Sending DHCP Offer to client\n");
 
     if (sendto(sock, &response, sizeof(DHCPPacket), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
         perror("Sendto failed");
@@ -157,6 +168,7 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 }
 
 void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
+    printf("Handling DHCP Request\n");
     DHCPPacket response;
     memset(&response, 0, sizeof(DHCPPacket));
 
@@ -191,6 +203,10 @@ void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
                  packet->chaddr[3], packet->chaddr[4], packet->chaddr[5]);
         ip_leases[num_leases].lease_time = ntohl(lease_time);
         num_leases++;
+        printf("Assigned IP: %s to MAC: %s\n", ip_leases[num_leases-1].ip, ip_leases[num_leases-1].mac);
+    }
+    else{
+        printf("No available lease slots\n");
     }
     pthread_mutex_unlock(&lease_mutex);
 
@@ -214,6 +230,8 @@ void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 
     client_addr->sin_port = htons(DHCP_CLIENT_PORT);
 
+    printf("Sending DHCP ACK to client\n");
+
     if (sendto(sock, &response, sizeof(DHCPPacket), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
         perror("Sendto failed");
     }
@@ -222,6 +240,8 @@ void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 }
 
 void* dhcp_server_thread(void* arg) {
+    printf("Starting DHCP server...\n");
+
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("Socket creation failed");
@@ -243,12 +263,14 @@ void* dhcp_server_thread(void* arg) {
     while (1) {
         DHCPPacket packet;
         socklen_t client_len = sizeof(client_addr);
+        printf("Waiting for DHCP packet...\n");
 
         ssize_t received = recvfrom(sock, &packet, sizeof(DHCPPacket), 0, (struct sockaddr *)&client_addr, &client_len);
         if (received < 0) {
             perror("Recvfrom failed");
             continue;
         }
+        printf("Received DHCP packet, processing...\n");
 
         // Process DHCP packet
         uint8_t *msg_type = NULL;
@@ -268,6 +290,9 @@ void* dhcp_server_thread(void* arg) {
                     handle_dhcp_request(&packet, &client_addr);
                     break;
                 // Handle other DHCP message types as needed
+                default:
+                    printf("Unsupported DHCP message type: %d\n", *msg_type);
+
             }
         }
     }
@@ -277,11 +302,15 @@ void* dhcp_server_thread(void* arg) {
 }
 
 int main() {
+    
     // Initialize DNS entries
+    printf("Start!\n");
+    printf("Initializing DNS table...\n");
     add_dns_entry("example.com", "93.184.216.34");
     add_dns_entry("google.com", "172.217.16.142");
 
     pthread_t server_thread;
+    printf("Starting DHCP server thread...\n");
     if (pthread_create(&server_thread, NULL, dhcp_server_thread, NULL) != 0) {
         perror("Failed to create server thread");
         return 1;
