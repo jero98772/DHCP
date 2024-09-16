@@ -16,6 +16,13 @@
 //we use 6868 because is used by real dhcp
 #define DHCP_CLIENT_PORT 6868
 #define MAX_DHCP_PACKET_SIZE 1024
+#define LOG_FILE "dhcp_server.log"
+
+FILE *log_file = NULL;
+
+// Mutex for thread-safe logging
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t lease_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct {
     uint8_t op;
@@ -44,7 +51,6 @@ typedef struct {
 IPLease ip_leases[MAX_CLIENTS];
 int num_leases = 0;
 
-pthread_mutex_t lease_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // DNS HashMap (simplified)
 #define MAX_DNS_ENTRIES 100
@@ -75,6 +81,36 @@ const char* lookup_dns(const char* domain) {
     }
     printf("No DNS entry found for %s\n", domain);
     return NULL;
+}
+
+void init_log() {
+    log_file = fopen(LOG_FILE, "a");
+    if (log_file == NULL) {
+        perror("Error opening log file");
+        exit(1);
+    }
+}
+
+void close_log() {
+    if (log_file != NULL) {
+        fclose(log_file);
+    }
+}
+
+void write_log(const char *message) {
+    if (log_file == NULL) {
+        return;
+    }
+
+    time_t now;
+    time(&now);
+    char *date = ctime(&now);
+    date[strlen(date) - 1] = '\0'; // Remove newline
+
+    pthread_mutex_lock(&log_mutex);
+    fprintf(log_file, "[%s] %s\n", date, message);
+    fflush(log_file);
+    pthread_mutex_unlock(&log_mutex);
 }
 
 uint32_t get_next_available_ip() {
@@ -115,7 +151,9 @@ void add_dhcp_option(uint8_t *options, int *offset, uint8_t option_code, uint8_t
 
 void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     printf("Handling DHCP Discover\n");
-
+    char log_message[256];
+    snprintf(log_message, sizeof(log_message), "Handling DHCP Discover from %s", inet_ntoa(client_addr->sin_addr));
+    write_log(log_message);
     DHCPPacket response;
     memset(&response, 0, sizeof(DHCPPacket));
 
@@ -169,6 +207,9 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 
 void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     printf("Handling DHCP Request\n");
+    char log_message[256];
+    snprintf(log_message, sizeof(log_message), "Handling DHCP Request from %s", inet_ntoa(client_addr->sin_addr));
+    write_log(log_message);
     DHCPPacket response;
     memset(&response, 0, sizeof(DHCPPacket));
 
@@ -181,7 +222,7 @@ void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     memcpy(response.chaddr, packet->chaddr, 16);
 
     int option_offset = 0;
-    uint8_t dhcp_msg_type = 5; // DHCP ACK
+    uint8_t dhcp_msg_type = 2; // DHCP Offer
     add_dhcp_option(response.options, &option_offset, 53, 1, &dhcp_msg_type);
 
     uint32_t lease_time = htonl(86400); // 24 hours
@@ -241,6 +282,7 @@ void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 
 void* dhcp_server_thread(void* arg) {
     printf("Starting DHCP server...\n");
+    write_log("Starting DHCP server...");
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -260,64 +302,67 @@ void* dhcp_server_thread(void* arg) {
         return NULL;
     }
 
-    while (1) {
+while (1) {
         DHCPPacket packet;
         socklen_t client_len = sizeof(client_addr);
-        printf("Waiting for DHCP packet...\n");
+        write_log("Waiting for DHCP packet...");
 
         ssize_t received = recvfrom(sock, &packet, sizeof(DHCPPacket), 0, (struct sockaddr *)&client_addr, &client_len);
         if (received < 0) {
-            perror("Recvfrom failed");
+            write_log("Recvfrom failed");
             continue;
         }
-        printf("Received DHCP packet, processing...\n");
+
+        char log_message[256];
+        snprintf(log_message, sizeof(log_message), "Received DHCP packet from %s", inet_ntoa(client_addr.sin_addr));
+        write_log(log_message);
 
         // Process DHCP packet
-        uint8_t *msg_type = NULL;
+        uint8_t msg_type = 0;
         for (int i = 0; i < sizeof(packet.options); i++) {
-            if (packet.options[i] == 53) { // DHCP Message Type option
-                msg_type = &packet.options[i + 2];
+            if (packet.options[i] == 53 && i + 1 < sizeof(packet.options)) { // DHCP Message Type option
+                msg_type = packet.options[i + 2];
                 break;
             }
         }
 
-        if (msg_type) {
-            switch (*msg_type) {
-                case 1: // DHCP Discover
-                    handle_dhcp_discover(&packet, &client_addr);
-                    break;
-                case 3: // DHCP Request
-                    handle_dhcp_request(&packet, &client_addr);
-                    break;
-                // Handle other DHCP message types as needed
-                default:
-                    printf("Unsupported DHCP message type: %d\n", *msg_type);
+        snprintf(log_message, sizeof(log_message), "DHCP message type: %d", msg_type);
+        write_log(log_message);
 
-            }
+        switch (msg_type) {
+            case 1: // DHCP Discover
+                handle_dhcp_discover(&packet, &client_addr);
+                break;
+            case 3: // DHCP Request
+                handle_dhcp_request(&packet, &client_addr);
+                break;
+            default:
+                snprintf(log_message, sizeof(log_message), "Unsupported DHCP message type: %d", msg_type);
+                write_log(log_message);
         }
     }
 
     close(sock);
     return NULL;
 }
-
 int main() {
+    init_log();
+    write_log("DHCP Server starting...");
     
     // Initialize DNS entries
-    printf("Start!\n");
-    printf("Initializing DNS table...\n");
     add_dns_entry("example.com", "93.184.216.34");
     add_dns_entry("google.com", "172.217.16.142");
 
     pthread_t server_thread;
-    printf("Starting DHCP server thread...\n");
     if (pthread_create(&server_thread, NULL, dhcp_server_thread, NULL) != 0) {
-        perror("Failed to create server thread");
+        write_log("Failed to create server thread");
+        close_log();
         return 1;
     }
 
-    // Wait for the server thread to finish (which it never will in this example)
     pthread_join(server_thread, NULL);
 
+    write_log("DHCP Server shutting down...");
+    close_log();
     return 0;
 }

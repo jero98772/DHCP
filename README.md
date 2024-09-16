@@ -44,6 +44,8 @@ new server
 
 	gcc -o dhcp_server test_server.c -lpthread
 
+	sudo ./dhcp_server
+
 ### run client in python
 
 	python client.py

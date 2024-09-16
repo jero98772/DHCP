@@ -81,22 +81,24 @@ func addDHCPOption(options []byte, optionType byte, optionValue []byte) []byte {
 }
 
 func createDHCPDiscover(macAddr net.HardwareAddr) *DHCPPacket {
-	fmt.Printf("Creating DHCP Discover packet with MAC address: %v\n", macAddr)
-	packet := &DHCPPacket{
-		Op:    1,
-		Htype: 1,
-		Hlen:  6,
-		Xid:   uint32(time.Now().UnixNano()),
-		Flags: 0x8000, // Broadcast
-	}
-	copy(packet.Chaddr[:], macAddr)
+    fmt.Printf("Creating DHCP Discover packet with MAC address: %v\n", macAddr)
+    packet := &DHCPPacket{
+        Op:    1,
+        Htype: 1,
+        Hlen:  6,
+        Xid:   uint32(time.Now().UnixNano()),
+        Flags: 0x8000, // Broadcast
+    }
+    copy(packet.Chaddr[:], macAddr)
 
-	// Add DHCP options
-	packet.Options = addDHCPOption(packet.Options, 53, []byte{1})               // DHCP Discover
-	packet.Options = addDHCPOption(packet.Options, 55, []byte{1, 3, 6, 15})     // Parameter Request List
-	packet.Options = append(packet.Options, 255)                                // End option
+    // Add DHCP options
+    packet.Options = []byte{
+        53, 1, 1,  // DHCP Discover (option 53, length 1, type 1)
+        55, 4, 1, 3, 6, 15,  // Parameter Request List
+        255,  // End option
+    }
 
-	return packet
+    return packet
 }
 
 func createDHCPRequest(offer *DHCPPacket, macAddr net.HardwareAddr) *DHCPPacket {
@@ -196,8 +198,66 @@ func dhcpClient() error {
 }
 
 func main() {
-	err := dhcpClient()
-	if err != nil {
-		fmt.Printf("DHCP client error: %v\n", err)
-	}
+    fmt.Println("Starting DHCP client...")
+
+    // Create a UDP connection
+    serverAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("255.255.255.255:%d", DHCPServerPort))
+    if err != nil {
+        fmt.Println("Error resolving server address:", err)
+        return
+    }
+
+    clientAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("127.0.0.1:%d", DHCPClientPort))
+    if err != nil {
+        fmt.Println("Error resolving client address:", err)
+        return
+    }
+
+    conn, err := net.ListenUDP("udp", clientAddr)
+    if err != nil {
+        fmt.Println("Error creating UDP connection:", err)
+        return
+    }
+    defer conn.Close()
+
+    // Get interface MAC address
+    ifaces, err := net.Interfaces()
+    if err != nil {
+        fmt.Println("Error getting network interfaces:", err)
+        return
+    }
+    var macAddr net.HardwareAddr
+    for _, iface := range ifaces {
+        if iface.Flags&net.FlagLoopback == 0 && iface.Flags&net.FlagUp != 0 {
+            macAddr = iface.HardwareAddr
+            fmt.Printf("Selected interface: %s with MAC: %v\n", iface.Name, macAddr)
+            break
+        }
+    }
+    if macAddr == nil {
+        fmt.Println("Failed to find a suitable network interface")
+        return
+    }
+
+    // Create and send DHCP Discover packet
+    discoverPacket := createDHCPDiscover(macAddr)
+    packetData := discoverPacket.Marshal()
+    _, err = conn.WriteToUDP(packetData, serverAddr)
+    if err != nil {
+        fmt.Println("Error sending DHCP Discover:", err)
+        return
+    }
+
+    // Wait for DHCP Offer
+    fmt.Println("Waiting for DHCP Offer...")
+    buffer := make([]byte, MaxDHCPPacketSize)
+    n, _, err := conn.ReadFromUDP(buffer)
+    if err != nil {
+        fmt.Println("Error receiving DHCP Offer:", err)
+        return
+    }
+    fmt.Printf("Received DHCP Offer, %d bytes\n", n)
+
+    // Process DHCP Offer here...
+    // (You would typically send a DHCP Request and wait for an ACK)
 }
