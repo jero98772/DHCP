@@ -45,7 +45,9 @@ typedef struct {
 typedef struct {
     char ip[16];
     char mac[18];
+    time_t lease_start;
     int lease_time;
+    int state; // 0: free, 1: offered, 2: leased
 } IPLease;
 
 IPLease ip_leases[MAX_CLIENTS];
@@ -125,21 +127,96 @@ uint32_t get_next_available_ip() {
 
         int available = 1;
         for (int i = 0; i < num_leases; i++) {
-            if (strcmp(ip_leases[i].ip, ip_str) == 0) {
+            if (strcmp(ip_leases[i].ip, ip_str) == 0 && ip_leases[i].state != 0) {
                 available = 0;
                 break;
             }
         }
 
         if (available) {
-            printf("Next available IP: %s\n", ip_str);
             return htonl(ip);
         }
     }
-    printf("No available IPs found.\n");
 
+    write_log("Error: IP address pool exhausted");
     return 0; // No available IPs
 }
+
+// Implement lease renewal
+void handle_dhcp_renew(DHCPPacket *packet, struct sockaddr_in *client_addr) {
+    write_log("Handling DHCP renew request");
+    
+    char client_mac[18];
+    snprintf(client_mac, sizeof(client_mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+             packet->chaddr[0], packet->chaddr[1], packet->chaddr[2],
+             packet->chaddr[3], packet->chaddr[4], packet->chaddr[5]);
+
+    pthread_mutex_lock(&lease_mutex);
+    for (int i = 0; i < num_leases; i++) {
+        if (strcmp(ip_leases[i].mac, client_mac) == 0) {
+            // Renew the lease
+            ip_leases[i].lease_start = time(NULL);
+            
+            // Send ACK
+            DHCPPacket response;
+            memset(&response, 0, sizeof(DHCPPacket));
+            
+            response.op = 2; // Boot Reply
+            response.htype = packet->htype;
+            response.hlen = packet->hlen;
+            response.xid = packet->xid;
+            response.yiaddr = inet_addr(ip_leases[i].ip);
+            response.siaddr = inet_addr(SERVER_IP);
+            memcpy(response.chaddr, packet->chaddr, 16);
+
+            int option_offset = 0;
+            uint8_t dhcp_msg_type = 5; // DHCP ACK
+            add_dhcp_option(response.options, &option_offset, 53, 1, &dhcp_msg_type);
+
+            uint32_t lease_time = htonl(ip_leases[i].lease_time);
+            add_dhcp_option(response.options, &option_offset, 51, 4, (uint8_t*)&lease_time);
+
+            uint32_t server_id = inet_addr(SERVER_IP);
+            add_dhcp_option(response.options, &option_offset, 54, 4, (uint8_t*)&server_id);
+
+            response.options[option_offset++] = 255; // End option
+
+            // Send the ACK
+            int sock = socket(AF_INET, SOCK_DGRAM, 0);
+            if (sock < 0) {
+                perror("Socket creation failed");
+                pthread_mutex_unlock(&lease_mutex);
+                return;
+            }
+
+            if (sendto(sock, &response, sizeof(DHCPPacket), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
+                perror("Sendto failed");
+            }
+
+            close(sock);
+            write_log("Lease renewed successfully");
+            pthread_mutex_unlock(&lease_mutex);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&lease_mutex);
+    
+    write_log("Lease renewal failed: IP not found");
+}
+
+
+// Implement remote network support and DHCP relay handling
+void handle_remote_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
+    if (packet->giaddr != 0) {
+        // This is a relayed request
+        write_log("Handling relayed DHCP request");
+        // Set the gateway IP address in the response
+        packet->giaddr = packet->giaddr;
+    } else {
+        write_log("Handling direct DHCP request");
+    }
+}
+
 
 void add_dhcp_option(uint8_t *options, int *offset, uint8_t option_code, uint8_t option_length, uint8_t *option_value) {
     printf("Adding DHCP option: Code %d, Length %d\n", option_code, option_length);
