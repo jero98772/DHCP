@@ -1,0 +1,603 @@
+### DHCP Server in C: Code Walkthrough
+
+This presentation gives a deep dive into the structure and functionality of the DHCP server implementation. The code uses C programming language along with system-level socket APIs for communication over the network. Below are the sections that cover each critical aspect.
+
+---
+### Slide 0: **Introduction to DHCP (Dynamic Host Configuration Protocol)**
+
+---
+
+#### What is DHCP?
+
+- **DHCP**: A network management protocol used to dynamically assign IP addresses to devices (clients) on a network.
+- **Why DHCP?**
+  - Simplifies IP management in networks.
+  - Automates IP assignment and configuration (IP address, subnet mask, gateway, DNS).
+  - Reduces configuration errors and conflicts.
+
+#### DHCP Process
+
+1. **DHCP Discover**: Client broadcasts a request for an IP.
+2. **DHCP Offer**: Server offers an IP address from its pool.
+3. **DHCP Request**: Client requests the offered IP address.
+4. **DHCP Acknowledgment**: Server confirms the lease and provides additional network configuration.
+
+---
+
+#### Key Components
+
+- **Client**: The device requesting an IP.
+- **Server**: The machine responsible for leasing IPs from a predefined pool.
+- **Lease**: Temporary allocation of an IP address to a client.
+
+---
+
+
+## 1. **Libraries and Dependencies**
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <pthread.h>
+```
+
+- **stdio.h**, **stdlib.h**: Standard libraries for input/output and memory allocation.
+- **string.h**: Provides string manipulation functions.
+- **unistd.h**: Provides access to POSIX operating system APIs (e.g., sleep, file descriptors).
+- **arpa/inet.h**: Defines networking functions like `inet_addr()` for IP address manipulation.
+- **sys/socket.h**: Contains functions and structures for socket programming.
+- **netinet/in.h**: Defines internet address structures.
+- **pthread.h**: For managing multiple threads in the server.
+
+---
+
+## 2. **Global Constants and Variables**
+
+```c
+#define MAX_CLIENTS 100
+#define IP_POOL_START "192.168.1.100"
+#define IP_POOL_END "192.168.1.200"
+#define SERVER_IP "127.0.0.1"
+#define DHCP_SERVER_PORT 6767
+#define DHCP_CLIENT_PORT 6868
+#define MAX_DHCP_PACKET_SIZE 1024
+#define LOG_FILE "dhcp_server.log"
+```
+
+- **MAX_CLIENTS**: Maximum number of clients the server can handle.
+- **IP_POOL_START/IP_POOL_END**: IP address range assigned by the DHCP server.
+- **SERVER_IP**: The IP address of the DHCP server itself.
+- **DHCP_SERVER_PORT**: Port used by the DHCP server.
+- **DHCP_CLIENT_PORT**: Port used by DHCP clients.
+- **MAX_DHCP_PACKET_SIZE**: Maximum size of the DHCP packet.
+- **LOG_FILE**: Name of the file where server logs are written.
+
+---
+
+## 3. **Structures**
+
+### 3.1 DHCP Packet Structure
+```c
+typedef struct {
+    uint8_t op;
+    uint8_t htype;
+    uint8_t hlen;
+    uint8_t hops;
+    uint32_t xid;
+    uint16_t secs;
+    uint16_t flags;
+    uint32_t ciaddr;
+    uint32_t yiaddr;
+    uint32_t siaddr;
+    uint32_t giaddr;
+    uint8_t chaddr[16];
+    uint8_t sname[64];
+    uint8_t file[128];
+    uint8_t options[312];
+} DHCPPacket;
+```
+
+- **op**: Operation code (request or response).
+- **htype**: Hardware type (Ethernet).
+- **hlen**: Hardware address length (typically 6 for MAC addresses).
+- **xid**: Transaction ID (used to match responses with requests).
+- **yiaddr**: "Your" IP address (IP assigned by the server to the client).
+- **ciaddr**: Client's current IP address (if already assigned).
+- **chaddr**: Client's hardware address (MAC).
+- **options**: DHCP options like lease time, message type, etc.
+
+### 3.2 IP Lease Structure
+```c
+typedef struct {
+    char ip[16];
+    char mac[18];
+    time_t lease_start;
+    int lease_time;
+    int state; // 0: free, 1: offered, 2: leased
+} IPLease;
+```
+
+- **ip**: The leased IP address.
+- **mac**: MAC address of the client.
+- **lease_time**: Lease duration in seconds.
+- **state**: Current state of the lease (free, offered, or leased).
+
+---
+
+## 4. **Log Mechanism**
+
+```c
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void init_log() {
+    log_file = fopen(LOG_FILE, "a");
+    if (log_file == NULL) {
+        perror("Error opening log file");
+        exit(1);
+    }
+}
+
+void write_log(const char *message) {
+    if (log_file == NULL) return;
+
+    time_t now;
+    time(&now);
+    char *date = ctime(&now);
+    date[strlen(date) - 1] = '\0';
+
+    pthread_mutex_lock(&log_mutex);
+    fprintf(log_file, "[%s] %s\n", date, message);
+    fflush(log_file);
+    pthread_mutex_unlock(&log_mutex);
+}
+
+void close_log() {
+    if (log_file != NULL) fclose(log_file);
+}
+```
+
+- **Log Mesages**: All log entries are written to a file (`LOG_FILE`), and the `log_mutex` ensures thread-safe logging.
+- **init_log()**: Opens the log file for appending.
+- **write_log()**: Logs a message with the current timestamp.
+- **close_log()**: Closes the log file when done.
+
+---
+
+## 5. **IP Management**
+
+### 5.1 Getting the Next Available IP Address
+```c
+uint32_t get_next_available_ip() {
+    uint32_t start_ip = inet_addr(IP_POOL_START);
+    uint32_t end_ip = inet_addr(IP_POOL_END);
+
+    for (uint32_t ip = ntohl(start_ip); ip <= ntohl(end_ip); ip++) {
+        char ip_str[16];
+        struct in_addr addr;
+        addr.s_addr = htonl(ip);
+        inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+
+        int available = 1;
+        for (int i = 0; i < num_leases; i++) {
+            if (strcmp(ip_leases[i].ip, ip_str) == 0 && ip_leases[i].state != 0) {
+                available = 0;
+                break;
+            }
+        }
+
+        if (available) {
+            return htonl(ip);
+        }
+    }
+
+    write_log("Error: IP address pool exhausted");
+    return 0;
+}
+```
+
+- Converts IPs between host and network byte order.
+- Loops through the defined IP range (`IP_POOL_START` to `IP_POOL_END`) and checks for the next available IP that is not currently leased.
+- Logs an error if no IPs are available.
+
+---
+
+## 6. **DHCP Message Handling**
+
+### 6.1 DHCP Discover
+```c
+void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
+    write_log("Handling DHCP Discover");
+    DHCPPacket response;
+    memset(&response, 0, sizeof(DHCPPacket));
+
+    response.op = 2; // Boot Reply
+    response.htype = packet->htype;
+    response.hlen = packet->hlen;
+    response.xid = packet->xid;
+    response.yiaddr = get_next_available_ip();
+    response.siaddr = inet_addr(SERVER_IP);
+    memcpy(response.chaddr, packet->chaddr, 16);
+
+    uint8_t dhcp_msg_type = 2; // DHCP Offer
+    add_dhcp_option(response.options, 53, 1, &dhcp_msg_type);
+
+    // Send response to client
+    ...
+}
+```
+
+- **DHCP Discover**: When the server receives a discover message, it prepares a DHCP offer message, assigns an IP from the pool, and sends the response.
+
+### 6.2 DHCP Request
+```c
+void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
+    write_log("Handling DHCP Request");
+
+    // Setup response packet with IP and options
+    ...
+    // Lease IP to client
+    pthread_mutex_lock(&lease_mutex);
+    ...
+    pthread_mutex_unlock(&lease_mutex);
+}
+```
+
+- **DHCP Request**: When the server receives a request for an IP, it verifies the request, prepares an acknowledgment, and leases the IP.
+
+---
+
+## 7. **Thread Safety**
+
+### 7.1 Mutex for Leases
+```c
+pthread_mutex_t lease_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_mutex_lock(&lease_mutex);
+// Critical section for lease management
+pthread_mutex_unlock(&lease_mutex);
+```
+
+- **lease_mutex**: Ensures thread safety when multiple clients request leases at the same time.
+
+### 7.2 Handling Leases
+```c
+for (int i = 0; i < num_leases; i++) {
+    if (strcmp(ip_leases[i].mac, client_mac) == 0) {
+        // Renew the lease
+        ...
+    }
+}
+```
+
+---
+
+## 8. **DHCP Option Handling**
+
+```c
+void add_dhcp_option(uint8_t *options, int *offset, uint8_t option_code, uint8_t option_length, uint8_t *option_value) {
+    options[(*offset)++] = option_code;
+    options[(*offset)++] = option_length;
+    memcpy(&options[*offset], option_value, option_length);
+    *offset += option_length;
+}
+```
+
+- **add_dhcp_option()**: Appends DHCP options to the response packet, such as message type or lease time.
+
+---
+
+## 9. **DNS Table Implementation**
+
+```c
+typedef struct {
+    char domain[256];
+    char ip[16];
+} DNSEntry;
+
+DNSEntry dns_table[MAX_DNS_ENTRIES];
+int dns_entries = 0;
+
+void add_dns_entry(const char* domain, const char* ip) {
+    if (dns_entries < MAX_DNS_ENTRIES) {
+        strncpy(dns_table[dns_entries].domain, domain, 255);
+        strncpy(dns_table[dns_entries].ip, ip,
+
+ 15);
+        dns_entries++;
+    } else {
+        write_log("DNS Table Full");
+    }
+}
+```
+
+---
+
+## 10. **Server Startup**
+
+```c
+int main() {
+    init_log();
+    init_socket();
+    init_ip_pool();
+
+    write_log("DHCP Server Started");
+
+    pthread_t threads[MAX_CLIENTS];
+    int thread_index = 0;
+
+    while (1) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+
+        DHCPPacket packet;
+        int recv_len = recvfrom(server_socket, &packet, sizeof(packet), 0, (struct sockaddr *) &client_addr, &client_len);
+        
+        if (recv_len > 0) {
+            pthread_create(&threads[thread_index++], NULL, handle_dhcp_message, (void *)&packet);
+        }
+    }
+
+    close_socket();
+    close_log();
+    return 0;
+}
+```
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Slide 11: **Sockets in Networking**
+
+---
+
+#### What is a Socket?
+
+- **Socket**: A communication endpoint used for sending and receiving data over a network.
+- Operates using IP addresses and port numbers.
+
+#### Types of Sockets
+
+- **Stream Sockets (TCP)**: Provide a reliable, connection-oriented communication (used in web traffic).
+- **Datagram Sockets (UDP)**: Provide connectionless communication, ideal for scenarios like DHCP.
+
+#### Basic Socket API
+
+```c
+int socket(int domain, int type, int protocol);
+```
+
+- **domain**: Specifies communication domain (e.g., `AF_INET` for IPv4).
+- **type**: Socket type (`SOCK_DGRAM` for UDP, `SOCK_STREAM` for TCP).
+- **protocol**: Specific protocol (0 for default protocol of the type).
+
+#### Socket Operations
+
+1. **Creating a socket**: `socket()`.
+2. **Binding a socket**: `bind()` to associate with a specific IP and port.
+3. **Sending and Receiving**: `sendto()` and `recvfrom()` for UDP.
+4. **Closing a socket**: `close()` when done.
+
+---
+
+### Slide 12: **Concurrency and Multithreading**
+
+---
+
+#### What is Concurrency?
+
+- **Concurrency**: The ability of a system to handle multiple tasks simultaneously.
+- In networking servers like DHCP, concurrency allows multiple clients to request IP addresses at the same time without blocking others.
+
+---
+
+#### Multithreading
+
+- **Multithreading**: Running multiple threads within a process, each capable of executing tasks in parallel.
+- Threads share the same memory space, making communication between them efficient but also requiring synchronization.
+
+---
+
+#### Creating Threads in C
+
+```c
+pthread_t thread;
+pthread_create(&thread, NULL, function_name, (void *)argument);
+pthread_join(thread, NULL);
+```
+
+- **pthread_create()**: Creates a new thread.
+- **pthread_join()**: Ensures that the main thread waits for a created thread to finish execution.
+
+---
+
+#### Benefits of Multithreading
+
+- **Efficiency**: Allows the server to handle multiple client requests in parallel.
+- **Resource Sharing**: Threads share memory and resources, reducing overhead compared to processes.
+
+---
+
+### Slide 13: **Mutex for Thread Synchronization**
+
+---
+
+#### What is a Mutex?
+
+- **Mutex (Mutual Exclusion)**: A synchronization primitive used to ensure that only one thread can access a shared resource at a time.
+- Prevents race conditions in multithreaded programs.
+
+---
+
+#### Mutex in C
+
+```c
+pthread_mutex_t lock;
+pthread_mutex_init(&lock, NULL);
+
+pthread_mutex_lock(&lock);
+// Critical section
+pthread_mutex_unlock(&lock);
+
+pthread_mutex_destroy(&lock);
+```
+
+- **pthread_mutex_init()**: Initializes the mutex.
+- **pthread_mutex_lock()**: Locks the mutex, ensuring only one thread can enter the critical section.
+- **pthread_mutex_unlock()**: Unlocks the mutex after the critical section.
+- **pthread_mutex_destroy()**: Cleans up the mutex when done.
+
+---
+
+#### Example: Protecting Critical Section
+
+```c
+pthread_mutex_lock(&lease_mutex);
+// Access and modify shared data (IP lease table)
+pthread_mutex_unlock(&lease_mutex);
+```
+
+---
+
+### Slide 14: **Pointers and Memory Management**
+
+---
+
+#### What is a Pointer?
+
+- **Pointer**: A variable that stores the memory address of another variable.
+- Essential for dynamic memory allocation and manipulating arrays, structs, and functions in C.
+
+#### Declaring a Pointer
+
+```c
+int *p;
+```
+
+- **int \*p**: Declares a pointer `p` that can store the address of an integer.
+
+#### Dereferencing a Pointer
+
+```c
+*p = 10;
+```
+
+- Dereferencing allows access to the value stored at the memory location the pointer is pointing to.
+
+---
+
+#### Dynamic Memory Allocation
+
+- **malloc()**: Allocates memory during runtime.
+  
+```c
+int *ptr = (int *)malloc(sizeof(int));
+```
+
+- **free()**: Deallocates memory when no longer needed.
+
+---
+
+### Slide 15: **Structs in C**
+
+---
+
+#### What is a Struct?
+
+- **Struct (Structure)**: A user-defined data type that groups related variables of different types.
+
+#### Declaring and Using Structs
+
+```c
+struct Person {
+    char name[50];
+    int age;
+    char address[100];
+};
+
+struct Person person1;
+strcpy(person1.name, "John Doe");
+person1.age = 30;
+```
+
+- Groups together related fields (e.g., name, age, address for a person).
+- Can access members using the dot operator (`person1.name`).
+
+---
+
+#### Struct with Pointers
+
+```c
+struct Person *p = &person1;
+p->age = 31; // Access struct members through a pointer using "->"
+```
+
+---
+
+
+### Slide 6: **Concurrency in DHCP Server**
+
+---
+
+#### Why Concurrency is Needed?
+
+- A DHCP server must handle multiple client requests simultaneously.
+- Without concurrency, each client would have to wait for the previous one to complete, leading to slow network performance.
+
+---
+
+#### Implementing Concurrency with Threads
+
+- Each client request is handled in a separate thread so we use multithreading insted of cocurrecny because it is implicit in multithreading.
+- **Thread creation**: When a DHCP request is received, the server spawns a new thread to process it.
+
+#### Example
+
+```c
+pthread_t thread;
+pthread_create(&thread, NULL, handle_dhcp_request, (void *)&client_packet);
+```
+
+---
+
+#### Thread-Safe Resource Management
+
+- **Mutexes** are used to prevent race conditions when multiple threads access shared data (e.g., IP lease table).
+
+```c
+pthread_mutex_lock(&lease_mutex);
+// Modify IP lease table safely
+pthread_mutex_unlock(&lease_mutex);
+```
+
+---
+
+### Slide 9: **Summary**
+
+- **DHCP**: Simplifies IP address management by dynamically assigning IPs to clients.
+- **Sockets**: Provide the mechanism for network communication between the DHCP server and clients.
+- **Concurrency**: Enables handling multiple client requests simultaneously, enhancing performance.
+- **Multithreading**: Allows the server to process each request in parallel.
+- **Mutex**: Ensures thread-safe access to shared resources like the IP lease table.
+- **Pointers and Structs**: Essential in C for dynamic memory management and organizing related data efficiently.
+
+---
+
