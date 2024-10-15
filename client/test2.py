@@ -16,8 +16,8 @@ DHCP_REQUESTED_IP = 50
 DHCP_LEASE_TIME = 51
 
 SERVER_IP = '127.0.0.1'
-SERVER_PORT = 6765
-CLIENT_PORT = 6866
+SERVER_PORT = 6767
+CLIENT_PORT = 6868
 
 def create_dhcp_packet(message_type, xid, requested_ip=None):
     packet = struct.pack('!BBBBIHH', 1, 1, 6, 0, xid, 0, 0)

@@ -14,8 +14,8 @@
 #define IP_POOL_START "192.168.1.100"
 #define IP_POOL_END "192.168.1.200"
 #define SERVER_IP "0.0.0.0"
-#define DHCP_SERVER_PORT 6761
-#define DHCP_CLIENT_PORT 6862
+#define DHCP_SERVER_PORT 6767
+#define DHCP_CLIENT_PORT 6868
 #define MAX_DHCP_PACKET_SIZE 1024
 #define LOG_FILE "dhcp_server.log"
 #define CONFIG_FILE "dhcp_config.txt"
@@ -243,7 +243,7 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
         write_log(error_msg);
         perror("Bind failed");
         close(sock);
-        return NULL;
+        return ;
     }
 
     client_addr->sin_port = htons(dhcp_client_port);
@@ -335,7 +335,7 @@ void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
         write_log(error_msg);
         perror("Bind failed");
         close(sock);
-        return NULL;
+        return ;
     }
 
 client_addr->sin_port = htons(dhcp_client_port);
