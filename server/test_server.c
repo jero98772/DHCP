@@ -64,6 +64,13 @@ typedef struct {
 
 DNSEntry dns_table[MAX_DNS_ENTRIES];
 int dns_entries = 0;
+void add_dhcp_option(uint8_t *options, int *offset, uint8_t option_code, uint8_t option_length, uint8_t *option_value) {
+    printf("Adding DHCP option: Code %d, Length %d\n", option_code, option_length);
+    options[(*offset)++] = option_code;
+    options[(*offset)++] = option_length;
+    memcpy(&options[*offset], option_value, option_length);
+    *offset += option_length;
+}
 
 void add_dns_entry(const char* domain, const char* ip) {
     if (dns_entries < MAX_DNS_ENTRIES) {
@@ -145,7 +152,8 @@ uint32_t get_next_available_ip() {
 // Implement lease renewal
 void handle_dhcp_renew(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     write_log("Handling DHCP renew request");
-    
+
+    // Format client MAC address as a string
     char client_mac[18];
     snprintf(client_mac, sizeof(client_mac), "%02x:%02x:%02x:%02x:%02x:%02x",
              packet->chaddr[0], packet->chaddr[1], packet->chaddr[2],
@@ -156,19 +164,20 @@ void handle_dhcp_renew(DHCPPacket *packet, struct sockaddr_in *client_addr) {
         if (strcmp(ip_leases[i].mac, client_mac) == 0) {
             // Renew the lease
             ip_leases[i].lease_start = time(NULL);
-            
-            // Send ACK
+
+            // Prepare the DHCP ACK response
             DHCPPacket response;
             memset(&response, 0, sizeof(DHCPPacket));
-            
+
             response.op = 2; // Boot Reply
             response.htype = packet->htype;
             response.hlen = packet->hlen;
             response.xid = packet->xid;
-            response.yiaddr = inet_addr(ip_leases[i].ip);
-            response.siaddr = inet_addr(SERVER_IP);
-            memcpy(response.chaddr, packet->chaddr, 16);
+            response.yiaddr = inet_addr(ip_leases[i].ip); // Client's IP address
+            response.siaddr = inet_addr(SERVER_IP); // Server IP address
+            memcpy(response.chaddr, packet->chaddr, 16); // Client MAC address
 
+            // Add DHCP options
             int option_offset = 0;
             uint8_t dhcp_msg_type = 5; // DHCP ACK
             add_dhcp_option(response.options, &option_offset, 53, 1, &dhcp_msg_type);
@@ -181,7 +190,7 @@ void handle_dhcp_renew(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 
             response.options[option_offset++] = 255; // End option
 
-            // Send the ACK
+            // Create a UDP socket
             int sock = socket(AF_INET, SOCK_DGRAM, 0);
             if (sock < 0) {
                 perror("Socket creation failed");
@@ -189,18 +198,24 @@ void handle_dhcp_renew(DHCPPacket *packet, struct sockaddr_in *client_addr) {
                 return;
             }
 
-            if (sendto(sock, &response, sizeof(DHCPPacket), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
+            // Send the DHCP ACK response
+            ssize_t sent_len = sendto(sock, &response, sizeof(DHCPPacket), 0,
+                                      (struct sockaddr *)client_addr, sizeof(struct sockaddr_in));
+            if (sent_len < 0) {
                 perror("Sendto failed");
+                close(sock);
+                pthread_mutex_unlock(&lease_mutex);
+                return;
             }
 
-            close(sock);
+            close(sock); // Close the socket after sending the response
             write_log("Lease renewed successfully");
-            pthread_mutex_unlock(&lease_mutex);
+            pthread_mutex_unlock(&lease_mutex); // Unlock the mutex
             return;
         }
     }
-    pthread_mutex_unlock(&lease_mutex);
-    
+    pthread_mutex_unlock(&lease_mutex); // Unlock if no matching lease is found
+
     write_log("Lease renewal failed: IP not found");
 }
 
@@ -218,13 +233,6 @@ void handle_remote_request(DHCPPacket *packet, struct sockaddr_in *client_addr) 
 }
 
 
-void add_dhcp_option(uint8_t *options, int *offset, uint8_t option_code, uint8_t option_length, uint8_t *option_value) {
-    printf("Adding DHCP option: Code %d, Length %d\n", option_code, option_length);
-    options[(*offset)++] = option_code;
-    options[(*offset)++] = option_length;
-    memcpy(&options[*offset], option_value, option_length);
-    *offset += option_length;
-}
 
 void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     printf("Handling DHCP Discover\n");
@@ -274,6 +282,15 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
         return;
     }
 
+
+
+    // Set SO_REUSEADDR to allow re-binding to the same port
+    int opt = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        close(sock);
+        return;
+    } 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -281,7 +298,7 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     server_addr.sin_port = htons(DHCP_SERVER_PORT);
 
     if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Bind failed");
+        perror("1Bind failed");
         close(sock);
         return;
     }
@@ -298,9 +315,12 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 
 void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     printf("Handling DHCP Request\n");
+    
     char log_message[256];
     snprintf(log_message, sizeof(log_message), "Handling DHCP Request from %s", inet_ntoa(client_addr->sin_addr));
     write_log(log_message);
+
+    // Prepare the DHCP response
     DHCPPacket response;
     memset(&response, 0, sizeof(DHCPPacket));
 
@@ -308,66 +328,71 @@ void handle_dhcp_request(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     response.htype = packet->htype;
     response.hlen = packet->hlen;
     response.xid = packet->xid;
-    response.yiaddr = packet->yiaddr;
-    response.siaddr = inet_addr(SERVER_IP);
-    memcpy(response.chaddr, packet->chaddr, 16);
+    response.siaddr = inet_addr(SERVER_IP); // Server's IP address
+    memcpy(response.chaddr, packet->chaddr, 16); // Copy client MAC address
 
+    // Add DHCP options to the response
     int option_offset = 0;
-    uint8_t dhcp_msg_type = 2; // DHCP Offer
+    uint8_t dhcp_msg_type = 2; // DHCP Offer (if offering an IP)
     add_dhcp_option(response.options, &option_offset, 53, 1, &dhcp_msg_type);
 
-    uint32_t lease_time = htonl(86400); // 24 hours
-    add_dhcp_option(response.options, &option_offset, 51, 4, (uint8_t*)&lease_time);
+    uint32_t lease_time = 86400; // 24 hours in host byte order
+    uint32_t lease_time_network = htonl(lease_time); // Convert to network byte order for transmission
+    add_dhcp_option(response.options, &option_offset, 51, 4, (uint8_t*)&lease_time_network);
 
-    uint32_t server_id = inet_addr(SERVER_IP);
+    uint32_t server_id = inet_addr(SERVER_IP); // Server identifier
     add_dhcp_option(response.options, &option_offset, 54, 4, (uint8_t*)&server_id);
 
     response.options[option_offset++] = 255; // End option
 
-    // Add lease to the list
+    // Assign an IP address to the client and add it to the lease table
     pthread_mutex_lock(&lease_mutex);
+
     if (num_leases < MAX_CLIENTS) {
-        struct in_addr addr;
-        addr.s_addr = packet->yiaddr;
-        inet_ntop(AF_INET, &addr, ip_leases[num_leases].ip, sizeof(ip_leases[num_leases].ip));
+        // Select an IP address (you should have a pool of available addresses)
+        // For simplicity, I'm using a static IP pool.
+        char new_ip[16] = "192.168.1.100"; // This should ideally come from a pool
+
+        // Set the response IP (yiaddr) to the new lease IP address
+        response.yiaddr = inet_addr(new_ip);
+
+        // Store the lease in the lease table
+        snprintf(ip_leases[num_leases].ip, sizeof(ip_leases[num_leases].ip), "%s", new_ip);
         snprintf(ip_leases[num_leases].mac, sizeof(ip_leases[num_leases].mac), "%02x:%02x:%02x:%02x:%02x:%02x",
                  packet->chaddr[0], packet->chaddr[1], packet->chaddr[2],
                  packet->chaddr[3], packet->chaddr[4], packet->chaddr[5]);
-        ip_leases[num_leases].lease_time = ntohl(lease_time);
+        ip_leases[num_leases].lease_time = lease_time;
+        ip_leases[num_leases].lease_start = time(NULL); // Record when the lease starts
+
+        printf("Assigned IP: %s to MAC: %s\n", ip_leases[num_leases].ip, ip_leases[num_leases].mac);
         num_leases++;
-        printf("Assigned IP: %s to MAC: %s\n", ip_leases[num_leases-1].ip, ip_leases[num_leases-1].mac);
-    }
-    else{
+    } else {
         printf("No available lease slots\n");
+        pthread_mutex_unlock(&lease_mutex);
+        return;
     }
+
     pthread_mutex_unlock(&lease_mutex);
 
+    // Create a UDP socket for sending the response
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("Socket creation failed");
         return;
     }
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_addr.sin_port = htons(DHCP_SERVER_PORT);
-
-    if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Bind failed");
-        close(sock);
-        return;
-    }
-
+    // Set the client port for response
     client_addr->sin_port = htons(DHCP_CLIENT_PORT);
 
-    printf("Sending DHCP ACK to client\n");
+    // Send the DHCP Offer (response)
+    printf("Sending DHCP Offer to client\n");
 
-    if (sendto(sock, &response, sizeof(DHCPPacket), 0, (struct sockaddr *)client_addr, sizeof(*client_addr)) < 0) {
+    ssize_t sent_bytes = sendto(sock, &response, sizeof(DHCPPacket), 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
+    if (sent_bytes < 0) {
         perror("Sendto failed");
     }
 
+    // Close the socket after sending the response
     close(sock);
 }
 
@@ -389,7 +414,7 @@ void* dhcp_server_thread(void* arg) {
     server_addr.sin_port = htons(DHCP_SERVER_PORT);
 
     if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Bind failed");
+        perror("2Bind failed");
         close(sock);
         return NULL;
     }

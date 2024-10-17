@@ -76,7 +76,14 @@ int main() {
         perror("Socket creation failed");
         exit(1);
     }
-
+    // Enable SO_REUSEADDR to reuse the address and port
+    int opt = 1;
+    if (setsockopt(dhcp_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        close(dhcp_sock);
+        close(dns_sock);
+        exit(1);
+    }
     struct sockaddr_in dhcp_server_addr, dns_server_addr, client_addr;
     memset(&dhcp_server_addr, 0, sizeof(dhcp_server_addr));
     memset(&dns_server_addr, 0, sizeof(dns_server_addr));
