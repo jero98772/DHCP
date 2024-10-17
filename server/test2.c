@@ -14,8 +14,8 @@
 #define IP_POOL_START "192.168.1.100"
 #define IP_POOL_END "192.168.1.200"
 #define SERVER_IP "0.0.0.0"
-#define DHCP_SERVER_PORT 6767
-#define DHCP_CLIENT_PORT 6868
+#define DHCP_SERVER_PORT 667
+#define DHCP_CLIENT_PORT 668
 #define MAX_DHCP_PACKET_SIZE 1024
 #define LOG_FILE "dhcp_server.log"
 #define CONFIG_FILE "dhcp_config.txt"
@@ -101,7 +101,45 @@ void load_config() {
 
     fclose(config_file);
 }
+int create_and_bind_socket(int port) {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("Socket creation failed");
+        return -1;
+    }
 
+    // Allow reuse of local addresses
+    int opt = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        close(sock);
+        return -1;
+    }
+
+    // Allow reuse of ports (BSD-specific, might not be necessary on all systems)
+    #ifdef SO_REUSEPORT
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt(SO_REUSEPORT) failed");
+        // Not critical, so we'll continue even if this fails
+    }
+    #endif
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_addr.sin_port = htons(port);
+
+    if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "Bind failed: %s", strerror(errno));
+        perror(error_msg);
+        close(sock);
+        return -1;
+    }
+
+    return sock;
+}
 void add_dns_entry(const char* domain, const char* ip) {
     if (dns_entries < MAX_DNS_ENTRIES) {
         strncpy(dns_table[dns_entries].domain, domain, MAX_DOMAIN_NAME_LENGTH - 1);
@@ -585,8 +623,8 @@ int main() {
     add_dns_entry("example.com", "93.184.216.34");
     add_dns_entry("google.com", "172.217.16.142");
 
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    //signal(SIGINT, signal_handler);
+    //signal(SIGTERM, signal_handler);
 
     pthread_t server_thread, cleanup_thread;
     if (pthread_create(&server_thread, NULL, dhcp_server_thread, NULL) != 0) {

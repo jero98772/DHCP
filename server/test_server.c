@@ -10,11 +10,11 @@
 #define MAX_CLIENTS 100
 #define IP_POOL_START "192.168.1.100"
 #define IP_POOL_END "192.168.1.200"
-#define SERVER_IP "127.0.0.1"
+#define SERVER_IP "0.0.0.0"
 //we use 6767 because is used by real dhcp
-#define DHCP_SERVER_PORT 6767
+#define DHCP_SERVER_PORT 667
 //we use 6868 because is used by real dhcp
-#define DHCP_CLIENT_PORT 6868
+#define DHCP_CLIENT_PORT 668
 #define MAX_DHCP_PACKET_SIZE 1024
 #define LOG_FILE "dhcp_server.log"
 
@@ -243,6 +243,7 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
     memcpy(response.chaddr, packet->chaddr, 16);
 
     int option_offset = 0;
+
     uint8_t dhcp_msg_type = 2; // DHCP Offer
     add_dhcp_option(response.options, &option_offset, 53, 1, &dhcp_msg_type);
 
@@ -251,6 +252,19 @@ void handle_dhcp_discover(DHCPPacket *packet, struct sockaddr_in *client_addr) {
 
     uint32_t server_id = inet_addr(SERVER_IP);
     add_dhcp_option(response.options, &option_offset, 54, 4, (uint8_t*)&server_id);
+
+    // Add subnet mask option
+    uint32_t subnet_mask = htonl(0xFFFFFF00); // 255.255.255.0
+    add_dhcp_option(response.options, &option_offset, 1, 4, (uint8_t*)&subnet_mask);
+
+    // Add router option (default gateway)
+    uint32_t router = inet_addr(SERVER_IP); // Using server IP as gateway
+    add_dhcp_option(response.options, &option_offset, 3, 4, (uint8_t*)&router);
+
+    // Add DNS server option
+    add_dhcp_option(response.options, &option_offset, 6, 4, (uint8_t*)&server_id);
+
+    response.options[option_offset++] = 255; // End option
 
     response.options[option_offset++] = 255; // End option
 
@@ -366,7 +380,8 @@ void* dhcp_server_thread(void* arg) {
         perror("Socket creation failed");
         return NULL;
     }
-
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     struct sockaddr_in server_addr, client_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
