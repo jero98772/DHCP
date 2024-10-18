@@ -1,5 +1,9 @@
 # DHCP
 
+### Video
+
+https://youtu.be/zZ7pqyRhiCs
+
 ### Ideas
 
 dns sever as a hashmap
