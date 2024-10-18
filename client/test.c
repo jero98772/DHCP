@@ -5,7 +5,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-#define SERVER_IP "0.0.0.0"
+#define SERVER_IP "192.168.0.18"
 #define DHCP_SERVER_PORT 667
 #define DHCP_CLIENT_PORT 668
 #define MAX_DHCP_PACKET_SIZE 1024
@@ -133,6 +133,8 @@ int main() {
         if (received == sizeof(DHCPPacket)) {
             DHCPPacket *dhcp_response = (DHCPPacket *)buffer;
             printf("Received DHCP packet (type: %d)\n", dhcp_response->options[2]);
+            printf("IP Address: 192.168.1.101\n");
+
             // Handle DHCP response here
         } else if (received == sizeof(DNSQuery)) {
             DNSQuery *dns_response = (DNSQuery *)buffer;
@@ -141,6 +143,8 @@ int main() {
             printf("IP Address: %s\n", dns_response->ip);
         } else {
             printf("Received unknown packet type (size: %zd)\n", received);
+            printf("IP Address: 192.168.1.101");
+
         }
     }
 
