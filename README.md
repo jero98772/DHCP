@@ -1,4 +1,4 @@
-# Protocolo DHCP
+# Protocolo DHCP Servidor y Cliente
 
 ## Introducción
 
