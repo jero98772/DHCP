@@ -1,5 +1,11 @@
 # DHCP
 
+### Introduccion
+
+Para poder entender nuestro proyecto primero debemos entender que es un DHCP, un DHCP es un protocolo de red utilizado para asignar automáticamente direcciones IP y otros parámetros de configuración a dispositivos en una red. Su principal objetivo es simplificar la administración de direcciones IP y garantizar que cada dispositivo tenga una dirección IP única, sin la necesidad de configurarlas manualmente. Este sistema es ampliamente utilizado en redes locales (LAN), y es esencial para grandes infraestructuras como campus universitarios, oficinas, o incluso redes domésticas con múltiples dispositivos.
+
+En nuestro caso el servidor es capaz de responder a las solicitudes DHCP DISCOVER con una oferta de dirección IP, confirmar la asignación de direcciones IP mediante DHCP ACK, y liberar direcciones IP una vez expiradas o declinadas. También incluye un sistema básico de resolución de nombres DNS.
+
 ### Video
 
 https://youtu.be/zZ7pqyRhiCs
