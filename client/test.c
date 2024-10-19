@@ -133,7 +133,7 @@ int main() {
         if (received == sizeof(DHCPPacket)) {
             DHCPPacket *dhcp_response = (DHCPPacket *)buffer;
             printf("Received DHCP packet (type: %d)\n", dhcp_response->options[2]);
-            printf("IP Address: 192.168.1.101\n");
+
 
             // Handle DHCP response here
         } else if (received == sizeof(DNSQuery)) {
@@ -143,7 +143,7 @@ int main() {
             printf("IP Address: %s\n", dns_response->ip);
         } else {
             printf("Received unknown packet type (size: %zd)\n", received);
-            printf("IP Address: 192.168.1.101");
+
 
         }
     }
