@@ -26,36 +26,7 @@ En conclusión, este proyecto nos permitió superar desafíos clave en la asigna
 
 Finalmente, implementamos un mecanismo para detener los procesos del servidor de manera eficiente. Esto, junto con la inclusión de un sistema básico de resolución de nombres DNS, garantiza una gestión estable y eficiente del sistema de red.
 
-### Ideas
 
-dns sever as a hashmap
-
-
-### comments of the teacher
-
-subneting not mean something strange, just can be accsesible from outside and hosted in aws
-
-el cliente debe mandar peticiones de forma repetitiva
-
-comnication in brodcast send to all
-
-with 2 ports
-
-1 for send from the client to the server port 67/udp
-
-2 for send from the server to the client port 68/udp
-
-dhcp discover from start, it send all users
-
-we can use a dns hashmap
-
-time of leassing , is time of that device will have that address
-
-log for time lessing
-
-offer is in brodcast for all 
-
-request for the client, asking for the parameters
 
 
 67/UDP (servidor)
@@ -63,10 +34,6 @@ request for the client, asking for the parameters
 
 ### run server in c
 
-	gcc server.c -o server
-	./server
-
-new server
 
 	gcc -o dhcp_server test_server.c -lpthread
 
@@ -74,9 +41,9 @@ new server
 
 ### run client in python
 
-	python client.py
+	gcc -o dhcp_c test.c -lpthread
 
-	sudo go run test_client.go 
+	sudo ./dhcp_c
 
 
 ### references
