@@ -6,7 +6,7 @@ Para poder entender nuestro proyecto primero debemos entender que es un DHCP, un
 
 En nuestro caso el servidor es capaz de responder a las solicitudes DHCP DISCOVER con una oferta de dirección IP, confirmar la asignación de direcciones IP mediante DHCP ACK, y liberar direcciones IP una vez expiradas o declinadas. También incluye un sistema básico de resolución de nombres DNS.
 
-### Video
+### Video - Explicacion
 
 https://youtu.be/zZ7pqyRhiCs
 
